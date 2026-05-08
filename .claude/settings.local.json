@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"from PyPhast.core.leak import *; from PyPhast.config import LeakConfig, LeakSizeConfig, AppConfig; from PyPhast.gui.leak_tab import LeakTab; print\\('OK'\\)\")"
+    ]
+  }
+}
