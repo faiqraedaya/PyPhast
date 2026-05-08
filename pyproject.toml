@@ -1,7 +1,7 @@
 [project]
-name = "phast-easy-input"
-version = "0.1.0"
-description = "Add your description here"
+name = "PyPhast"
+version = "0.2.0"
+description = "PyPhast provides a Python-based GUI to view, edit and transfer data to Excel files for Phast input."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = []
