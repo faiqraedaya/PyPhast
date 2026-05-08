@@ -1,6 +1,6 @@
 # PyPhast
 
-A desktop editor for DNV Phast input spreadsheets.  Open a Phast workbook, inspect and edit its contents, import data from an isolatable-section workbook, then save — all without touching the file until you're ready.
+A desktop editor for DNV Phast input spreadsheets.
 
 ---
 
@@ -27,55 +27,36 @@ Import data from a separate source workbook (e.g. an isolatable-section table) i
 |-----|-----------|
 | **Pressure Vessels** | `Pressure vessel` sheet — name, stream, pressure, temperature, inventory |
 | **Leaks** | `Leak` sheet — one row per leak size per vessel, optional FBR diameter lookup |
-| **Mixtures** | `MIXTURE` sheet — stream IDs and component composition vectors |
+| **Mixtures** | `Mixture` sheet — stream IDs and component composition vectors |
 
-**Transfer modes:** Overwrite (clears rows from 63 down) or Append (writes after existing data).
-
-### Deferred save
-All edits and imports modify the in-memory workbook only.  The title bar shows a `●` and the status bar shows **Modified** when there are unsaved changes.  Use **File → Save** (Ctrl+S) to write to disk.  Closing, opening, or creating a new file prompts to save if needed.
+**Transfer modes:** Overwrite (clears existing rows) or Append (writes after existing data).
 
 ---
 
 ## Install
 
-```bash
-pip install -r requirements.txt
-```
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/faiqraedaya/PyPhast
+   cd "PyPhast"
+   ```
 
-Requires Python 3.11+ and the packages below:
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-| Package | Version |
-|---------|---------|
-| PySide6 | ≥ 6.5 |
-| openpyxl | ≥ 3.1 |
+## Usage 
 
----
+1. Launch the application:
+   ```bash
+   python main.py
+   ```
 
-## Run
-
-```bash
-python main.py
-# or
-python -m PyPhast
-```
-
----
-
-## Menu reference
-
-| Menu | Item | Shortcut |
-|------|------|----------|
-| File | New | Ctrl+N |
-| File | Open… | Ctrl+O |
-| File | Save | Ctrl+S |
-| File | Exit | Ctrl+Q |
-| Edit | Clear Pressure Vessel data… | — |
-| Edit | Clear Leak data… | — |
-| Edit | Clear Mixture data… | — |
-| View | Expand hierarchy | Ctrl+→ |
-| View | Collapse hierarchy | Ctrl+← |
-| View | Show Log | Ctrl+L |
-| About | About PyPhast… | — |
+   Or, to run directly as a module:
+   ```bash
+   python -m PyPhast
+   ```
 
 ---
 
@@ -91,7 +72,7 @@ python -m PyPhast
 
 ---
 
-## Project layout
+## Project structure
 
 ```
 PyPhast/
@@ -116,14 +97,6 @@ PyPhast/
     └── widgets.py             # FileSelector, ColumnLetterEdit, LabeledSpinBox
 ```
 
----
+## License
 
-## Extending
-
-To add support for a new Phast sheet type:
-
-1. Add layout constants to `core/target_layout.py`.
-2. Create `core/<type>.py` with `<Type>SourceConfig`, `<Type>Options`, `read_*`, `write_*`.
-3. Create `gui/<type>_tab.py`.
-4. Wire into `gui/main_window.py` (one tab + one transfer handler).
-5. Extend `config.py` with a matching config dataclass.
+This project is provided under the MIT License.
