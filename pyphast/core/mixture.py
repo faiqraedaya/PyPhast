@@ -199,6 +199,8 @@ def write_mixtures(
     ws = find_sheet(tgt_wb, L.MIX_SHEET_NAME)
     first_col_idx, last_col_idx = L.mix_scan_col_indices()
 
+    existing_mix_names: set[str] = set()
+
     if opts.transfer_mode is TransferMode.OVERWRITE:
         existing_last = find_last_populated_row(
             ws, first_col_idx, last_col_idx, L.DATA_START_ROW
@@ -216,6 +218,19 @@ def write_mixtures(
                 f"on '{L.MIX_SHEET_NAME}'."
             )
         start_row = L.DATA_START_ROW
+    elif opts.transfer_mode is TransferMode.SKIP_EXISTING:
+        existing_last = find_last_populated_row(
+            ws, first_col_idx, last_col_idx, L.DATA_START_ROW
+        )
+        existing_mix_names = _read_existing_mixture_names(ws, existing_last)
+        original_count = len(records)
+        records = [rec for rec in records if rec.name not in existing_mix_names]
+        skipped = original_count - len(records)
+        start_row = max(existing_last + 1, L.DATA_START_ROW)
+        report.info.append(
+            f"Skip existing: {skipped} mixture(s) already in target skipped, "
+            f"{len(records)} new mixture(s) to append."
+        )
     else:
         existing_last = find_last_populated_row(
             ws, first_col_idx, last_col_idx, L.DATA_START_ROW
@@ -270,6 +285,19 @@ def write_mixtures(
 
 
 # ---------------------------------------------------------------------------
+
+
+def _read_existing_mixture_names(ws, last_row: int) -> set[str]:
+    """Return mixture stream names already present in the target MIXTURE sheet."""
+    name_idx = col_letter_to_index(L.MIX_COL_NAME)
+    names: set[str] = set()
+    for r in range(L.DATA_START_ROW, last_row + 1):
+        v = ws.cell(row=r, column=name_idx).value
+        if v is not None:
+            s = str(v).strip()
+            if s:
+                names.add(s)
+    return names
 
 
 def _stringify(v) -> str | None:

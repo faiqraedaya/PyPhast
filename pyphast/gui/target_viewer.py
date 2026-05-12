@@ -68,12 +68,28 @@ _MIX_COLS: list[_ColSpec] = [
     _ColSpec("Prop. Method", L.MIX_COL_PROPERTY_METHOD),
 ]
 
+_TVL_COLS: list[_ColSpec] = [
+    _ColSpec("Use",            L.TVL_COL_USE),
+    _ColSpec("Study",          L.TVL_COL_STUDY),
+    _ColSpec("Folder",         L.TVL_COL_FOLDER),
+    _ColSpec("PV Name",        L.TVL_COL_PV_NAME),
+    _ColSpec("TVL Name",       L.TVL_COL_NAME),
+    _ColSpec("Orifice (mm)",   L.TVL_COL_ORIFICE_DIAMETER),
+    _ColSpec("Release Dir.",   L.TVL_COL_OUTDOOR_RELEASE_DIRECTION),
+    _ColSpec("Avg Rate Method",L.TVL_COL_AVG_RATE_METHOD),
+    _ColSpec("Safety System",  L.TVL_COL_SAFETY_SYSTEM),
+    _ColSpec("Isolation?",     L.TVL_COL_ISOLATION),
+    _ColSpec("Time to Iso. (s)",L.TVL_COL_TIME_TO_ISOLATION),
+]
+
 _PV_KEY_COL   = L.PV_COL_NAME
 _LEAK_KEY_COL = L.LEAK_COL_PV_NAME
+_TVL_KEY_COL  = L.TVL_COL_PV_NAME
 _MIX_KEY_COL  = L.MIX_COL_COMPONENT
 
 _PV_NAME_COL_IDX   = next(i for i, c in enumerate(_PV_COLS)   if c.col_letter == L.PV_COL_NAME)
 _LEAK_NAME_COL_IDX = next(i for i, c in enumerate(_LEAK_COLS) if c.col_letter == L.LEAK_COL_NAME)
+_TVL_NAME_COL_IDX  = next(i for i, c in enumerate(_TVL_COLS)  if c.col_letter == L.TVL_COL_NAME)
 
 
 # ---------------------------------------------------------------------------
@@ -118,12 +134,14 @@ def _make_table(cols: list[_ColSpec]) -> QTableWidget:
 class TargetViewerWidget(QGroupBox):
     """Primary editor: PV / Leak / Mixture tables with cut/copy/paste support."""
 
-    workbookModified  = Signal()
-    pvInsertRequested = Signal(int)        # after_excel_row
-    pvDeleteRequested = Signal(int, str)   # excel_row, pv_name
-    leakInsertRequested = Signal(int)      # after_excel_row
-    leakDeleteRequested = Signal(int)      # excel_row
-    countsUpdated     = Signal(int, int, int)  # pv_n, leak_n, mix_n
+    workbookModified    = Signal()
+    pvInsertRequested   = Signal(int)        # after_excel_row
+    pvDeleteRequested   = Signal(int, str)   # excel_row, pv_name
+    leakInsertRequested = Signal(int)        # after_excel_row
+    leakDeleteRequested = Signal(int)        # excel_row
+    tvlInsertRequested  = Signal(int)        # after_excel_row
+    tvlDeleteRequested  = Signal(int)        # excel_row
+    countsUpdated       = Signal(int, int, int)  # pv_n, leak_n, mix_n
 
     def __init__(self, parent=None) -> None:
         super().__init__("Workbook Editor", parent)
@@ -132,6 +150,7 @@ class TargetViewerWidget(QGroupBox):
 
         self._pv_row_map:   list[int] = []
         self._leak_row_map: list[int] = []
+        self._tvl_row_map:  list[int] = []
         self._mix_row_map:  list[int] = []
 
         self._build_ui()
@@ -153,6 +172,7 @@ class TargetViewerWidget(QGroupBox):
 
         self._pv_table   = _make_table(_PV_COLS)
         self._leak_table = _make_table(_LEAK_COLS)
+        self._tvl_table  = _make_table(_TVL_COLS)
         self._mix_table  = _make_table(_MIX_COLS)
 
         # Context menus
@@ -162,6 +182,9 @@ class TargetViewerWidget(QGroupBox):
         self._leak_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._leak_table.customContextMenuRequested.connect(self._on_leak_context_menu)
 
+        self._tvl_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._tvl_table.customContextMenuRequested.connect(self._on_tvl_context_menu)
+
         self._mix_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._mix_table.customContextMenuRequested.connect(
             lambda pos: self._on_generic_context_menu(self._mix_table, pos)
@@ -170,6 +193,7 @@ class TargetViewerWidget(QGroupBox):
         self._tab_widget = QTabWidget()
         self._tab_widget.addTab(self._pv_table,   "Pressure Vessels")
         self._tab_widget.addTab(self._leak_table, "Leaks")
+        self._tab_widget.addTab(self._tvl_table,  "Time Varying Leaks")
         self._tab_widget.addTab(self._mix_table,  "Mixtures")
         layout.addWidget(self._tab_widget)
 
@@ -181,6 +205,11 @@ class TargetViewerWidget(QGroupBox):
         self._leak_table.cellChanged.connect(
             lambda r, c: self._on_cell_changed(
                 L.LEAK_SHEET_NAME, _LEAK_COLS, self._leak_row_map, self._leak_table, r, c,
+            )
+        )
+        self._tvl_table.cellChanged.connect(
+            lambda r, c: self._on_cell_changed(
+                L.TVL_SHEET_NAME, _TVL_COLS, self._tvl_row_map, self._tvl_table, r, c,
             )
         )
         self._mix_table.cellChanged.connect(
@@ -221,6 +250,10 @@ class TargetViewerWidget(QGroupBox):
             self._load_tab(
                 self._wb, L.LEAK_SHEET_NAME, _LEAK_COLS, _LEAK_KEY_COL,
                 L.leak_scan_col_indices, self._leak_table, self._leak_row_map,
+            )
+            self._load_tab(
+                self._wb, L.TVL_SHEET_NAME,  _TVL_COLS,  _TVL_KEY_COL,
+                L.tvl_scan_col_indices,  self._tvl_table,  self._tvl_row_map,
             )
             self._load_tab(
                 self._wb, L.MIX_SHEET_NAME,  _MIX_COLS,  _MIX_KEY_COL,
@@ -269,6 +302,20 @@ class TargetViewerWidget(QGroupBox):
                                     _LEAK_COLS, self._leak_row_map, L.LEAK_SHEET_NAME)
         menu.exec(self._leak_table.viewport().mapToGlobal(pos))
 
+    def _on_tvl_context_menu(self, pos) -> None:
+        table_row = self._tvl_table.rowAt(pos.y())
+        menu = QMenu(self)
+        if 0 <= table_row < len(self._tvl_row_map):
+            excel_row = self._tvl_row_map[table_row]
+            menu.addAction("Add Time Varying Leak Below",
+                           lambda: self.tvlInsertRequested.emit(excel_row))
+            menu.addAction("Delete Time Varying Leak",
+                           lambda: self.tvlDeleteRequested.emit(excel_row))
+            menu.addSeparator()
+        self._add_clipboard_actions(menu, self._tvl_table,
+                                    _TVL_COLS, self._tvl_row_map, L.TVL_SHEET_NAME)
+        menu.exec(self._tvl_table.viewport().mapToGlobal(pos))
+
     def _on_generic_context_menu(self, table, pos) -> None:
         """Context menu with only copy/cut/paste (used by Mixture table)."""
         if table is self._mix_table:
@@ -300,6 +347,7 @@ class TargetViewerWidget(QGroupBox):
         candidates = [
             (self._pv_table,   _PV_COLS,   self._pv_row_map,   L.PV_SHEET_NAME),
             (self._leak_table, _LEAK_COLS, self._leak_row_map, L.LEAK_SHEET_NAME),
+            (self._tvl_table,  _TVL_COLS,  self._tvl_row_map,  L.TVL_SHEET_NAME),
             (self._mix_table,  _MIX_COLS,  self._mix_row_map,  L.MIX_SHEET_NAME),
         ]
         for table, cols, row_map, sheet in candidates:
@@ -517,6 +565,7 @@ class TargetViewerWidget(QGroupBox):
         for table, rmap in (
             (self._pv_table,   self._pv_row_map),
             (self._leak_table, self._leak_row_map),
+            (self._tvl_table,  self._tvl_row_map),
             (self._mix_table,  self._mix_row_map),
         ):
             table.setRowCount(0)

@@ -20,6 +20,13 @@ _LEAK_CONTEXT_COLS = (
     col_letter_to_index(L.LEAK_COL_PV_NAME),
 )
 
+_TVL_CONTEXT_COLS = (
+    col_letter_to_index(L.TVL_COL_USE),
+    col_letter_to_index(L.TVL_COL_STUDY),
+    col_letter_to_index(L.TVL_COL_FOLDER),
+    col_letter_to_index(L.TVL_COL_PV_NAME),
+)
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
@@ -73,7 +80,7 @@ def insert_pv_copy_after(wb, src_row: int, after_row: int) -> int:
 
 
 def delete_pv_row(wb, excel_row: int, pv_name: str) -> None:
-    """Remove one PV row and shift later rows up; also removes associated leaks."""
+    """Remove one PV row and shift later rows up; also removes associated leaks and TVLs."""
     ws_pv = find_sheet(wb, L.PV_SHEET_NAME)
     first_c, last_c = L.pv_scan_col_indices()
     last_row = find_last_populated_row(ws_pv, first_c, last_c, L.DATA_START_ROW)
@@ -82,6 +89,7 @@ def delete_pv_row(wb, excel_row: int, pv_name: str) -> None:
     clear_range(ws_pv, first_c, last_c, last_row, last_row)
     if pv_name:
         _delete_leaks_for_pv(wb, pv_name)
+        _delete_tvls_for_pv(wb, pv_name)
 
 
 def swap_pv_rows(wb, row1: int, row2: int) -> None:
@@ -200,6 +208,88 @@ def insert_leak_copy_after(wb, src_row: int, after_row: int) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Time varying leak operations
+# ---------------------------------------------------------------------------
+
+def insert_tvl_after(wb, after_excel_row: int) -> int:
+    """Shift TVL rows after *after_excel_row* down; return the new blank row.
+
+    Inherits PV Name, Study, Folder, Use from *after_excel_row*.
+    """
+    ws = find_sheet(wb, L.TVL_SHEET_NAME)
+    first_c, last_c = L.tvl_scan_col_indices()
+    new_row = _insert_blank_row(ws, after_excel_row, first_c, last_c)
+    for col in _TVL_CONTEXT_COLS:
+        ws.cell(row=new_row, column=col).value = ws.cell(row=after_excel_row, column=col).value
+    ws.cell(row=new_row, column=col_letter_to_index(L.TVL_COL_NAME)).value = "New TVL"
+    return new_row
+
+
+def add_tvl_for_pv(wb, pv_name: str, pv_excel_row: int) -> int:
+    """Add a new TVL for *pv_name* after its last existing TVL (or at sheet end).
+
+    Context (Study, Folder, Use) is taken from the PV sheet when no prior TVL
+    exists for this vessel.
+    """
+    try:
+        ws_tvl = find_sheet(wb, L.TVL_SHEET_NAME)
+    except Exception:  # noqa: BLE001
+        return -1
+
+    first_c, last_c = L.tvl_scan_col_indices()
+    last_row = find_last_populated_row(ws_tvl, first_c, last_c, L.DATA_START_ROW)
+    pv_col = col_letter_to_index(L.TVL_COL_PV_NAME)
+
+    last_pv_tvl: int | None = None
+    for r in range(L.DATA_START_ROW, last_row + 1):
+        v = ws_tvl.cell(row=r, column=pv_col).value
+        if v is not None and str(v).strip() == pv_name:
+            last_pv_tvl = r
+
+    if last_pv_tvl is not None:
+        return insert_tvl_after(wb, last_pv_tvl)
+
+    # No existing TVLs for this PV — append at end, seeding context from PV row.
+    new_row = max(last_row + 1, L.DATA_START_ROW)
+    try:
+        ws_pv = find_sheet(wb, L.PV_SHEET_NAME)
+        ws_tvl.cell(row=new_row, column=col_letter_to_index(L.TVL_COL_USE)).value = (
+            ws_pv.cell(row=pv_excel_row, column=col_letter_to_index(L.PV_COL_USE)).value
+        )
+        ws_tvl.cell(row=new_row, column=col_letter_to_index(L.TVL_COL_STUDY)).value = (
+            ws_pv.cell(row=pv_excel_row, column=col_letter_to_index(L.PV_COL_STUDY)).value
+        )
+        ws_tvl.cell(row=new_row, column=col_letter_to_index(L.TVL_COL_FOLDER)).value = (
+            ws_pv.cell(row=pv_excel_row, column=col_letter_to_index(L.PV_COL_FOLDER)).value
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    ws_tvl.cell(row=new_row, column=col_letter_to_index(L.TVL_COL_PV_NAME)).value = pv_name
+    ws_tvl.cell(row=new_row, column=col_letter_to_index(L.TVL_COL_NAME)).value = "New TVL"
+    return new_row
+
+
+def delete_tvl_row(wb, excel_row: int) -> None:
+    """Remove one TVL row and shift later rows up."""
+    ws = find_sheet(wb, L.TVL_SHEET_NAME)
+    first_c, last_c = L.tvl_scan_col_indices()
+    last_row = find_last_populated_row(ws, first_c, last_c, L.DATA_START_ROW)
+    for r in range(excel_row, last_row):
+        _copy_row(ws, r + 1, r, first_c, last_c)
+    clear_range(ws, first_c, last_c, last_row, last_row)
+
+
+def insert_tvl_copy_after(wb, src_row: int, after_row: int) -> int:
+    """Insert a deep copy of TVL *src_row* after *after_row*; return new row."""
+    ws = find_sheet(wb, L.TVL_SHEET_NAME)
+    first_c, last_c = L.tvl_scan_col_indices()
+    new_row = _insert_blank_row(ws, after_row, first_c, last_c)
+    actual_src = src_row + 1 if src_row > after_row else src_row
+    _copy_row(ws, actual_src, new_row, first_c, last_c)
+    return new_row
+
+
+# ---------------------------------------------------------------------------
 # Internal – bulk leak deletion used by delete_pv_row
 # ---------------------------------------------------------------------------
 
@@ -211,6 +301,31 @@ def _delete_leaks_for_pv(wb, pv_name: str) -> None:
     first_c, last_c = L.leak_scan_col_indices()
     last_row = find_last_populated_row(ws, first_c, last_c, L.DATA_START_ROW)
     pv_col = col_letter_to_index(L.LEAK_COL_PV_NAME)
+
+    rows_to_delete: list[int] = [
+        r for r in range(L.DATA_START_ROW, last_row + 1)
+        if (ws.cell(row=r, column=pv_col).value or "") and
+           str(ws.cell(row=r, column=pv_col).value).strip() == pv_name
+    ]
+
+    offset = 0
+    for orig_r in rows_to_delete:
+        actual_r = orig_r - offset
+        actual_last = last_row - offset
+        for r in range(actual_r, actual_last):
+            _copy_row(ws, r + 1, r, first_c, last_c)
+        clear_range(ws, first_c, last_c, actual_last, actual_last)
+        offset += 1
+
+
+def _delete_tvls_for_pv(wb, pv_name: str) -> None:
+    try:
+        ws = find_sheet(wb, L.TVL_SHEET_NAME)
+    except Exception:  # noqa: BLE001
+        return
+    first_c, last_c = L.tvl_scan_col_indices()
+    last_row = find_last_populated_row(ws, first_c, last_c, L.DATA_START_ROW)
+    pv_col = col_letter_to_index(L.TVL_COL_PV_NAME)
 
     rows_to_delete: list[int] = [
         r for r in range(L.DATA_START_ROW, last_row + 1)

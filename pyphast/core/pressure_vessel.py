@@ -25,6 +25,7 @@ class InventoryMode(Enum):
 class TransferMode(Enum):
     OVERWRITE = "overwrite"
     APPEND = "append"
+    SKIP_EXISTING = "skip_existing"
 
 
 @dataclass
@@ -157,6 +158,20 @@ def write_pressure_vessels(
                 f"on '{L.PV_SHEET_NAME}'."
             )
         start_row = L.DATA_START_ROW
+    elif opts.transfer_mode is TransferMode.SKIP_EXISTING:
+        existing_last = find_last_populated_row(
+            ws, first_col_idx, last_col_idx, L.DATA_START_ROW
+        )
+        existing_names = _read_existing_names(ws, col_letter_to_index(L.PV_COL_NAME),
+                                              first_col_idx, last_col_idx)
+        original_count = len(rows)
+        rows = [r for r in rows if r.name not in existing_names]
+        skipped = original_count - len(rows)
+        start_row = max(existing_last + 1, L.DATA_START_ROW)
+        report.info.append(
+            f"Skip existing: {skipped} PV(s) already in target skipped, "
+            f"{len(rows)} new PV(s) to append."
+        )
     else:  # APPEND
         existing_last = find_last_populated_row(
             ws, first_col_idx, last_col_idx, L.DATA_START_ROW
@@ -210,6 +225,19 @@ def write_pressure_vessels(
 
 
 # ---------------------------------------------------------------------------
+
+
+def _read_existing_names(ws, name_col_idx: int, first_c: int, last_c: int) -> set[str]:
+    """Read non-empty name values from the target sheet into a set."""
+    last_row = find_last_populated_row(ws, first_c, last_c, L.DATA_START_ROW)
+    existing: set[str] = set()
+    for r in range(L.DATA_START_ROW, last_row + 1):
+        v = ws.cell(row=r, column=name_col_idx).value
+        if v is not None:
+            s = str(v).strip()
+            if s:
+                existing.add(s)
+    return existing
 
 
 def _maybe_round(value: float | None, places: int | None) -> float | None:

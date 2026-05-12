@@ -107,3 +107,47 @@ def leak_scan_col_indices() -> tuple[int, int]:
         col_letter_to_index(LEAK_SCAN_FIRST_COL),
         col_letter_to_index(LEAK_SCAN_LAST_COL),
     )
+
+
+# ---- Time varying leak sheet -----------------------------------------------
+
+TVL_SHEET_NAME = "Time varying leak"
+
+TVL_COL_USE = "A"
+TVL_COL_STUDY = "B"
+TVL_COL_FOLDER = "C"
+TVL_COL_PV_NAME = "H"
+TVL_COL_NAME = "T"
+TVL_COL_ORIFICE_DIAMETER = "U"
+TVL_COL_OUTDOOR_RELEASE_DIRECTION = "AC"
+TVL_COL_AVG_RATE_METHOD = "AJ"
+TVL_COL_SAFETY_SYSTEM = "AQ"
+TVL_COL_ISOLATION = "AR"
+TVL_COL_TIME_TO_ISOLATION = "AS"
+
+TVL_SCAN_FIRST_COL = "A"
+TVL_SCAN_LAST_COL = "AS"
+
+TVL_VALUE_USE = "Yes"
+TVL_VALUE_OUTDOOR_RELEASE_DIRECTION = "0 Horizontal"
+
+TVL_AVG_RATE_METHOD_OPTIONS = [
+    "1 Average rates",
+    "2 Given rate",
+    "3 Average between 2 rates",
+    "4 Up to 10 rates",
+]
+TVL_AVG_RATE_METHOD_DEFAULT = TVL_AVG_RATE_METHOD_OPTIONS[0]
+
+TVL_SAFETY_SYSTEM_YES = "1 Yes"
+TVL_SAFETY_SYSTEM_NO = "0 No"
+
+TVL_ISOLATION_SUCCESSFUL = "1 Successful"
+TVL_ISOLATION_FAILS = "0 Fails"
+
+
+def tvl_scan_col_indices() -> tuple[int, int]:
+    return (
+        col_letter_to_index(TVL_SCAN_FIRST_COL),
+        col_letter_to_index(TVL_SCAN_LAST_COL),
+    )

@@ -34,6 +34,8 @@ _FOLDER_COL_INDICES = tuple(
 _COL_H = col_letter_to_index("H")
 _LEAK_NAME_COL    = col_letter_to_index(L.LEAK_COL_NAME)
 _LEAK_ORIFICE_COL = col_letter_to_index(L.LEAK_COL_ORIFICE_DIAMETER)
+_TVL_NAME_COL     = col_letter_to_index(L.TVL_COL_NAME)
+_TVL_ORIFICE_COL  = col_letter_to_index(L.TVL_COL_ORIFICE_DIAMETER)
 
 _ROLE = Qt.ItemDataRole.UserRole
 
@@ -69,12 +71,18 @@ class HierarchyViewerWidget(QGroupBox):
     pvMoveUpRequested   = Signal(int)          # excel_row
     pvMoveDownRequested = Signal(int)          # excel_row
     pvAddLeakRequested  = Signal(int, str)     # pv_excel_row, pv_name
+    pvAddTvlRequested   = Signal(int, str)     # pv_excel_row, pv_name
     pvPasteRequested    = Signal(int, int, bool, str)  # src_row, after_row, is_cut, pv_name
 
     # Leak operations
     leakInsertRequested = Signal(int)          # after_excel_row
     leakDeleteRequested = Signal(int)          # excel_row
     leakPasteRequested  = Signal(int, int, bool)  # src_row, after_row, is_cut
+
+    # TVL operations
+    tvlInsertRequested  = Signal(int)          # after_excel_row
+    tvlDeleteRequested  = Signal(int)          # excel_row
+    tvlPasteRequested   = Signal(int, int, bool)  # src_row, after_row, is_cut
 
     def __init__(self, parent=None) -> None:
         super().__init__("Project Hierarchy", parent)
@@ -171,6 +179,7 @@ class HierarchyViewerWidget(QGroupBox):
         study_names    = self._read_studies(wb)
         pv_data        = self._read_pv_rows(wb)
         leak_data      = self._read_leak_rows(wb)
+        tvl_data       = self._read_tvl_rows(wb)
 
         ws_item = QTreeWidgetItem(self._tree, [workspace_name or "(unnamed workspace)"])
         ws_item.setExpanded(True)
@@ -199,6 +208,10 @@ class HierarchyViewerWidget(QGroupBox):
                     leak_item = QTreeWidgetItem(pv_item, [leak_text])
                     leak_item.setData(0, _ROLE, ("leak", leak_row))
 
+                for tvl_text, tvl_row in tvl_data.get((study, folder_path, pv_name), []):
+                    tvl_item = QTreeWidgetItem(pv_item, [tvl_text])
+                    tvl_item.setData(0, _ROLE, ("tvl", tvl_row))
+
     # ------------------------------------------------------------------
     # Context menu
     # ------------------------------------------------------------------
@@ -220,6 +233,8 @@ class HierarchyViewerWidget(QGroupBox):
                            lambda: self.pvInsertRequested.emit(excel_row))
             menu.addAction("Add Leak",
                            lambda: self.pvAddLeakRequested.emit(excel_row, pv_name))
+            menu.addAction("Add Time Varying Leak",
+                           lambda: self.pvAddTvlRequested.emit(excel_row, pv_name))
             menu.addAction("Delete Pressure Vessel",
                            lambda: self.pvDeleteRequested.emit(excel_row, pv_name))
             menu.addSeparator()
@@ -252,6 +267,22 @@ class HierarchyViewerWidget(QGroupBox):
                 src = self._clipboard
                 menu.addAction("Paste Below", lambda: self._emit_leak_paste(src, leak_row))
 
+        elif data and data[0] == "tvl":
+            _, tvl_row = data
+            menu.addSeparator()
+            menu.addAction("Add Time Varying Leak Below",
+                           lambda: self.tvlInsertRequested.emit(tvl_row))
+            menu.addAction("Delete Time Varying Leak",
+                           lambda: self.tvlDeleteRequested.emit(tvl_row))
+            menu.addSeparator()
+            menu.addAction("Copy",
+                           lambda: self._set_clipboard(data, is_cut=False))
+            menu.addAction("Cut",
+                           lambda: self._set_clipboard(data, is_cut=True))
+            if self._clipboard and self._clipboard[0] == "tvl":
+                src = self._clipboard
+                menu.addAction("Paste Below", lambda: self._emit_tvl_paste(src, tvl_row))
+
         if not menu.isEmpty():
             menu.exec(self._tree.viewport().mapToGlobal(pos))
 
@@ -272,6 +303,12 @@ class HierarchyViewerWidget(QGroupBox):
     def _emit_leak_paste(self, src: tuple, after_row: int) -> None:
         _, src_row = src
         self.leakPasteRequested.emit(src_row, after_row, self._clipboard_is_cut)
+        if self._clipboard_is_cut:
+            self._clipboard = None
+
+    def _emit_tvl_paste(self, src: tuple, after_row: int) -> None:
+        _, src_row = src
+        self.tvlPasteRequested.emit(src_row, after_row, self._clipboard_is_cut)
         if self._clipboard_is_cut:
             self._clipboard = None
 
@@ -305,6 +342,8 @@ class HierarchyViewerWidget(QGroupBox):
             self._emit_pv_paste(self._clipboard, item_data[1])
         elif clip_type == "leak" and item_data[0] == "leak":
             self._emit_leak_paste(self._clipboard, item_data[1])
+        elif clip_type == "tvl" and item_data[0] == "tvl":
+            self._emit_tvl_paste(self._clipboard, item_data[1])
 
     # ------------------------------------------------------------------
     # Move-button callbacks
@@ -405,4 +444,29 @@ class HierarchyViewerWidget(QGroupBox):
             leak_text = f"{leak_name}: {orifice}" if orifice else leak_name
             key = (study, _folder_path(ws, r), pv_name)
             result.setdefault(key, []).append((leak_text, r))
+        return result
+
+    def _read_tvl_rows(
+        self, wb
+    ) -> dict[tuple[str, tuple[str, ...], str], list[tuple[str, int]]]:
+        """Return {(study, folder_path, pv_name): [(tvl_text, excel_row), ...]}."""
+        result: dict[tuple[str, tuple[str, ...], str], list[tuple[str, int]]] = {}
+        try:
+            ws = find_sheet(wb, L.TVL_SHEET_NAME)
+        except Exception:  # noqa: BLE001
+            return result
+        first_c, last_c = L.tvl_scan_col_indices()
+        last_row = find_last_populated_row(ws, first_c, last_c, L.DATA_START_ROW)
+        for r in range(L.DATA_START_ROW, last_row + 1):
+            study   = _str_val(ws, r, _COL_B)
+            pv_name = _str_val(ws, r, _COL_H)
+            if not study or not pv_name:
+                continue
+            tvl_name = _str_val(ws, r, _TVL_NAME_COL)
+            if not tvl_name:
+                continue
+            orifice  = _str_val(ws, r, _TVL_ORIFICE_COL)
+            tvl_text = f"TVL: {tvl_name}: {orifice}" if orifice else f"TVL: {tvl_name}"
+            key = (study, _folder_path(ws, r), pv_name)
+            result.setdefault(key, []).append((tvl_text, r))
         return result

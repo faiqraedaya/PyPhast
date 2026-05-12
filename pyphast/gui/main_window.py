@@ -22,21 +22,25 @@ from PySide6.QtWidgets import (
 )
 
 from .. import __app_name__, __version__
-from ..config import load_config, save_config
+from ..config import _MAX_RECENT, load_config, save_config
 from ..core.excel_io import find_sheet, load_workbook, save_workbook
 from ..core.sheet_utils import clear_range, find_last_populated_row
 from ..core import target_layout as L
 from ..core.columns import col_letter_to_index
 from ..core.pv_operations import (
     add_leak_for_pv,
+    add_tvl_for_pv,
     delete_leak_row,
     delete_pv_row,
+    delete_tvl_row,
     find_next_pv_row,
     find_prev_pv_row,
     insert_leak_after,
     insert_leak_copy_after,
     insert_pv_after,
     insert_pv_copy_after,
+    insert_tvl_after,
+    insert_tvl_copy_after,
     swap_pv_rows,
 )
 from .hierarchy_viewer import HierarchyViewerWidget
@@ -72,10 +76,14 @@ class MainWindow(QMainWindow):
         self.hierarchy_viewer.pvMoveUpRequested.connect(self._pv_move_up)
         self.hierarchy_viewer.pvMoveDownRequested.connect(self._pv_move_down)
         self.hierarchy_viewer.pvAddLeakRequested.connect(self._pv_add_leak)
+        self.hierarchy_viewer.pvAddTvlRequested.connect(self._pv_add_tvl)
         self.hierarchy_viewer.pvPasteRequested.connect(self._pv_paste)
         self.hierarchy_viewer.leakInsertRequested.connect(self._leak_insert)
         self.hierarchy_viewer.leakDeleteRequested.connect(self._leak_delete)
         self.hierarchy_viewer.leakPasteRequested.connect(self._leak_paste)
+        self.hierarchy_viewer.tvlInsertRequested.connect(self._tvl_insert)
+        self.hierarchy_viewer.tvlDeleteRequested.connect(self._tvl_delete)
+        self.hierarchy_viewer.tvlPasteRequested.connect(self._tvl_paste)
 
         self.target_viewer = TargetViewerWidget()
         self.target_viewer.workbookModified.connect(self._on_workbook_modified)
@@ -83,6 +91,8 @@ class MainWindow(QMainWindow):
         self.target_viewer.pvDeleteRequested.connect(self._pv_delete)
         self.target_viewer.leakInsertRequested.connect(self._leak_insert)
         self.target_viewer.leakDeleteRequested.connect(self._leak_delete)
+        self.target_viewer.tvlInsertRequested.connect(self._tvl_insert)
+        self.target_viewer.tvlDeleteRequested.connect(self._tvl_delete)
         self.target_viewer.countsUpdated.connect(self._on_counts_updated)
 
         self.import_panel = ImportPanel()
@@ -146,6 +156,18 @@ class MainWindow(QMainWindow):
         act_open.triggered.connect(self._file_open)
         file_menu.addAction(act_open)
 
+        self._act_open_last = QAction("Open &Last", self)
+        self._act_open_last.setShortcut("Ctrl+Shift+O")
+        self._act_open_last.setStatusTip("Reopen the most recently opened workbook")
+        self._act_open_last.setEnabled(False)
+        self._act_open_last.triggered.connect(self._file_open_last)
+        file_menu.addAction(self._act_open_last)
+
+        self._recent_menu = file_menu.addMenu("Open &Recent")
+        self._recent_menu.setEnabled(False)
+
+        file_menu.addSeparator()
+
         self._act_save = QAction("&Save", self)
         self._act_save.setShortcut(QKeySequence.StandardKey.Save)
         self._act_save.setStatusTip("Save all changes back to disk")
@@ -184,6 +206,17 @@ class MainWindow(QMainWindow):
             )
         )
         edit_menu.addAction(act_clear_leak)
+
+        act_clear_tvl = QAction("Clear &Time Varying Leak data…", self)
+        act_clear_tvl.setStatusTip(
+            "Remove all time varying leak rows from the workbook (unsaved)"
+        )
+        act_clear_tvl.triggered.connect(
+            lambda: self._clear_sheet_data(
+                L.TVL_SHEET_NAME, L.tvl_scan_col_indices()
+            )
+        )
+        edit_menu.addAction(act_clear_tvl)
 
         act_clear_mix = QAction("Clear &Mixture data…", self)
         act_clear_mix.setStatusTip(
@@ -268,6 +301,60 @@ class MainWindow(QMainWindow):
         if path:
             self._open_file(path)
 
+    def _file_open_last(self) -> None:
+        if not self._config.recent_files:
+            return
+        if not self._confirm_discard():
+            return
+        self._open_file(self._config.recent_files[0])
+
+    # -----------------------------------------------------------------------
+
+    def _add_to_recent(self, path: str) -> None:
+        recent = self._config.recent_files
+        # Remove duplicates then prepend, keep max _MAX_RECENT entries
+        recent = [p for p in recent if p != path]
+        recent.insert(0, path)
+        self._config.recent_files = recent[:_MAX_RECENT]
+        self._update_recent_menu()
+
+    def _update_recent_menu(self) -> None:
+        self._recent_menu.clear()
+        recent = self._config.recent_files
+        if not recent:
+            self._recent_menu.setEnabled(False)
+            self._act_open_last.setEnabled(False)
+            return
+        self._recent_menu.setEnabled(True)
+        self._act_open_last.setEnabled(True)
+        for path in recent:
+            p = Path(path)
+            label = p.name
+            act = QAction(label, self)
+            act.setStatusTip(path)
+            act.setToolTip(path)
+            if not p.exists():
+                act.setEnabled(False)
+            else:
+                act.triggered.connect(lambda checked=False, fp=path: self._open_recent(fp))
+            self._recent_menu.addAction(act)
+        self._recent_menu.addSeparator()
+        act_clear = QAction("Clear Recent", self)
+        act_clear.triggered.connect(self._clear_recent)
+        self._recent_menu.addAction(act_clear)
+
+    def _open_recent(self, path: str) -> None:
+        if not self._confirm_discard():
+            return
+        self._open_file(path)
+
+    def _clear_recent(self) -> None:
+        self._config.recent_files = []
+        self._update_recent_menu()
+        self._save_config()
+
+    # -----------------------------------------------------------------------
+
     def _file_save(self) -> None:
         if self._target_wb is None or not self._target_path:
             return
@@ -296,6 +383,7 @@ class MainWindow(QMainWindow):
             self._act_save.setEnabled(True)
             self._update_title()
             self._update_statusbar()
+            self._add_to_recent(path)
             self._save_config()
             self._log_info("File loaded.")
         except Exception as e:  # noqa: BLE001
@@ -514,6 +602,72 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Paste failed", f"Could not paste leak:\n{e}")
             self._log_error(f"Leak paste failed: {e}")
 
+    def _pv_add_tvl(self, pv_excel_row: int, pv_name: str) -> None:
+        if self._target_wb is None:
+            return
+        try:
+            new_row = add_tvl_for_pv(self._target_wb, pv_name, pv_excel_row)
+            if new_row < 0:
+                self._log_warn("Could not find or create time varying leak sheet.")
+                return
+            self._set_dirty()
+            self.target_viewer.refresh()
+            self.hierarchy_viewer.refresh()
+            self._log_info(f"Added new TVL for '{pv_name}' at row {new_row}.")
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Add TVL failed", f"Could not add TVL:\n{e}")
+            self._log_error(f"Add TVL failed: {e}")
+
+    def _tvl_insert(self, after_excel_row: int) -> None:
+        if self._target_wb is None:
+            return
+        try:
+            new_row = insert_tvl_after(self._target_wb, after_excel_row)
+            self._set_dirty()
+            self.target_viewer.refresh()
+            self.hierarchy_viewer.refresh()
+            self._log_info(f"Inserted new time varying leak at row {new_row}.")
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Insert failed", f"Could not insert TVL:\n{e}")
+            self._log_error(f"TVL insert failed: {e}")
+
+    def _tvl_delete(self, excel_row: int) -> None:
+        if self._target_wb is None:
+            return
+        reply = QMessageBox.question(
+            self,
+            "Delete Time Varying Leak",
+            f"Delete time varying leak at row {excel_row}?\n"
+            "This cannot be undone (until you close without saving).",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            delete_tvl_row(self._target_wb, excel_row)
+            self._set_dirty()
+            self.target_viewer.refresh()
+            self.hierarchy_viewer.refresh()
+            self._log_info(f"Deleted time varying leak at row {excel_row}.")
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Delete failed", f"Could not delete TVL:\n{e}")
+            self._log_error(f"TVL delete failed: {e}")
+
+    def _tvl_paste(self, src_row: int, after_row: int, is_cut: bool) -> None:
+        if self._target_wb is None:
+            return
+        try:
+            insert_tvl_copy_after(self._target_wb, src_row, after_row)
+            if is_cut:
+                actual_src = src_row + 1 if src_row > after_row else src_row
+                delete_tvl_row(self._target_wb, actual_src)
+            self._set_dirty()
+            self.target_viewer.refresh()
+            self.hierarchy_viewer.refresh()
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Paste failed", f"Could not paste TVL:\n{e}")
+            self._log_error(f"TVL paste failed: {e}")
+
     # -----------------------------------------------------------------------
     # View menu actions
     # -----------------------------------------------------------------------
@@ -605,6 +759,7 @@ class MainWindow(QMainWindow):
         self.import_panel.load_from_config(self._config)
         self._update_title()
         self._update_statusbar()
+        self._update_recent_menu()
         if self._config.target_path and Path(self._config.target_path).exists():
             self._open_file(self._config.target_path)
 

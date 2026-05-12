@@ -115,6 +115,8 @@ def write_leaks(
     ws = find_sheet(tgt_wb, L.LEAK_SHEET_NAME)
     first_col_idx, last_col_idx = L.leak_scan_col_indices()
 
+    existing_leak_keys: set[tuple[str, str]] = set()
+
     if opts.transfer_mode is TransferMode.OVERWRITE:
         existing_last = find_last_populated_row(
             ws, first_col_idx, last_col_idx, L.DATA_START_ROW
@@ -129,6 +131,16 @@ def write_leaks(
                 f"on '{L.LEAK_SHEET_NAME}'."
             )
         start_row = L.DATA_START_ROW
+    elif opts.transfer_mode is TransferMode.SKIP_EXISTING:
+        existing_last = find_last_populated_row(
+            ws, first_col_idx, last_col_idx, L.DATA_START_ROW
+        )
+        existing_leak_keys = _read_existing_leak_keys(ws, existing_last)
+        start_row = max(existing_last + 1, L.DATA_START_ROW)
+        report.info.append(
+            f"Skip existing: {len(existing_leak_keys)} (PV, leak) pair(s) already "
+            f"in target will be skipped."
+        )
     else:
         existing_last = find_last_populated_row(
             ws, first_col_idx, last_col_idx, L.DATA_START_ROW
@@ -150,9 +162,16 @@ def write_leaks(
 
     active_leaks = [ls for ls in opts.leak_sizes if ls.name.strip()]
     current_row = start_row
+    skip_mode = opts.transfer_mode is TransferMode.SKIP_EXISTING
+    skipped_count = 0
 
     for pv in pv_records:
         for leak in active_leaks:
+            key = (pv.pv_name, leak.name.strip())
+            if skip_mode and key in existing_leak_keys:
+                skipped_count += 1
+                continue
+
             if opts.fbr_enabled and leak.name.strip().upper() == "FBR":
                 diameter: float | None = fbr_diameters.get(pv.pv_name)
                 if diameter is None:
@@ -174,7 +193,23 @@ def write_leaks(
             )
             current_row += 1
 
+    if skip_mode and skipped_count:
+        report.info.append(f"Skip existing: {skipped_count} leak row(s) skipped.")
+
     report.rows_written = current_row - start_row
     if report.rows_written > 0:
         report.first_row = start_row
         report.last_row = current_row - 1
+
+
+def _read_existing_leak_keys(ws, last_row: int) -> set[tuple[str, str]]:
+    """Return {(pv_name, leak_name)} for all populated rows in the Leak sheet."""
+    pv_idx   = col_letter_to_index(L.LEAK_COL_PV_NAME)
+    name_idx = col_letter_to_index(L.LEAK_COL_NAME)
+    keys: set[tuple[str, str]] = set()
+    for r in range(L.DATA_START_ROW, last_row + 1):
+        pv   = ws.cell(row=r, column=pv_idx).value
+        name = ws.cell(row=r, column=name_idx).value
+        if pv is not None and name is not None:
+            keys.add((str(pv).strip(), str(name).strip()))
+    return keys

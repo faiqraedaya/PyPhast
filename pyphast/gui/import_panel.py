@@ -26,6 +26,13 @@ from ..core.leak import (
     read_pv_names_from_target,
     write_leaks,
 )
+from ..core import target_layout as L
+from ..core.time_varying_leak import (
+    TVLOptions,
+    read_pv_phases_from_source,
+    split_pv_records_by_phase,
+    write_tvls,
+)
 from ..core.mixture import MixtureOptions, read_mixtures, write_mixtures
 from ..core.pressure_vessel import (
     PressureVesselOptions,
@@ -40,6 +47,7 @@ from ..core.validation import (
     warn_unresolved_pv_streams,
 )
 from .leak_tab import LeakTab
+from .time_varying_leak_tab import TimeVaryingLeakTab
 from .mixture_tab import MixtureTab
 from .pressure_vessel_tab import PressureVesselTab
 from .widgets import FileSelector
@@ -72,12 +80,15 @@ class ImportPanel(QGroupBox):
         self.source_selector.setPath(config.source_path)
         if config.transfer_mode == "append":
             self.rb_append.setChecked(True)
+        elif config.transfer_mode == "skip_existing":
+            self.rb_skip.setChecked(True)
         else:
             self.rb_overwrite.setChecked(True)
         self._decimal_places_spin.setValue(config.import_decimal_places)
         self.pv_tab.load_from_config(config.pressure_vessel)
         self.mix_tab.load_from_config(config.mixture)
         self.leak_tab.load_from_config(config.leak)
+        self.tvl_tab.load_from_config(config.time_varying_leak)
         self._refresh_sheet_names()
 
     def save_to_config(self, config: AppConfig) -> None:
@@ -87,6 +98,7 @@ class ImportPanel(QGroupBox):
         self.pv_tab.save_to_config(config.pressure_vessel)
         self.mix_tab.save_to_config(config.mixture)
         self.leak_tab.save_to_config(config.leak)
+        self.tvl_tab.save_to_config(config.time_varying_leak)
 
     # ------------------------------------------------------------------
     # UI
@@ -103,15 +115,32 @@ class ImportPanel(QGroupBox):
 
         mode_row = QHBoxLayout()
         self.rb_overwrite = QRadioButton("Overwrite")
-        self.rb_overwrite.setToolTip("Clear existing rows from 63 down before writing")
+        self.rb_overwrite.setToolTip(
+            "Clear all existing rows (from row 63 down) before writing.\n"
+            "Most destructive — manually edited data is lost."
+        )
         self.rb_append = QRadioButton("Append")
-        self.rb_append.setToolTip("Continue writing after the last existing row")
+        self.rb_append.setToolTip(
+            "Add all incoming rows after the last existing row, even if duplicates exist.\n"
+            "Safest for preserving existing data, but may create duplicate entries."
+        )
+        self.rb_skip = QRadioButton("Skip existing")
+        self.rb_skip.setToolTip(
+            "Compare incoming names with the target sheet and skip any that\n"
+            "already exist. Only new, non-duplicate items are appended.\n\n"
+            "Example: target has A, B, C, D — source has A, B, E, F.\n"
+            "Result: A, B, C, D, E, F  (A and B skipped; E, F appended).\n\n"
+            "Recommended when the target has been manually edited and you\n"
+            "want to add new items without overwriting or duplicating existing ones."
+        )
         self.rb_overwrite.setChecked(True)
         bg = QButtonGroup(self)
         bg.addButton(self.rb_overwrite)
         bg.addButton(self.rb_append)
+        bg.addButton(self.rb_skip)
         mode_row.addWidget(self.rb_overwrite)
         mode_row.addWidget(self.rb_append)
+        mode_row.addWidget(self.rb_skip)
         mode_row.addStretch(1)
 
         dp_label = QLabel("Decimal places:")
@@ -132,11 +161,14 @@ class ImportPanel(QGroupBox):
         self.pv_tab   = PressureVesselTab()
         self.mix_tab  = MixtureTab()
         self.leak_tab = LeakTab()
+        self.tvl_tab  = TimeVaryingLeakTab()
         self.tabs.addTab(self.pv_tab,   "Pressure Vessels")
         self.tabs.addTab(self.leak_tab, "Leaks")
+        self.tabs.addTab(self.tvl_tab,  "Time Varying Leaks")
         self.tabs.addTab(self.mix_tab,  "Mixtures")
         self.pv_tab.transferRequested.connect(self._run_pv_transfer)
         self.leak_tab.transferRequested.connect(self._run_leak_transfer)
+        self.tvl_tab.transferRequested.connect(self._run_tvl_transfer)
         self.mix_tab.transferRequested.connect(self._run_mix_transfer)
         layout.addWidget(self.tabs, 1)
 
@@ -164,7 +196,11 @@ class ImportPanel(QGroupBox):
     # ------------------------------------------------------------------
 
     def _transfer_mode(self) -> TransferMode:
-        return TransferMode.APPEND if self.rb_append.isChecked() else TransferMode.OVERWRITE
+        if self.rb_append.isChecked():
+            return TransferMode.APPEND
+        if self.rb_skip.isChecked():
+            return TransferMode.SKIP_EXISTING
+        return TransferMode.OVERWRITE
 
     # ------------------------------------------------------------------
     # Guards
@@ -309,7 +345,7 @@ class ImportPanel(QGroupBox):
         self.transferComplete.emit(not report.errors)
 
     # ------------------------------------------------------------------
-    # Transfer: leaks
+    # Transfer: leaks (with optional TVL routing)
     # ------------------------------------------------------------------
 
     def _run_leak_transfer(self) -> None:
@@ -332,7 +368,29 @@ class ImportPanel(QGroupBox):
             )
             return
 
+        model_tvl = self.pv_tab.model_vapour_as_tvl()
+        phase_col = self.pv_tab.phase_col_letter()
+
+        if model_tvl and not phase_col:
+            QMessageBox.warning(
+                self, "Phase column missing",
+                "TVL routing is enabled but no phase column is configured. "
+                "Enter the phase column letter in the Pressure Vessels tab.",
+            )
+            return
+
+        if model_tvl:
+            tvl_opts = self.tvl_tab.tvl_options(self._transfer_mode())
+            if not tvl_opts.leak_sizes:
+                QMessageBox.warning(
+                    self, "No TVL leak sizes",
+                    "TVL routing is enabled but no leak sizes are configured in the "
+                    "Time Varying Leaks tab.",
+                )
+                return
+
         report = TransferReport()
+        tvl_report = TransferReport()
 
         try:
             pv_records = read_pv_names_from_target(self._target_wb, report)
@@ -363,7 +421,58 @@ class ImportPanel(QGroupBox):
                     f"Read FBR diameters for {len(fbr_diameters)} section(s)."
                 )
 
-            write_leaks(self._target_wb, pv_records, opts, fbr_diameters, report)
+            if model_tvl:
+                pv_cfg = self.pv_tab.source_config()
+                if not pv_cfg.sheet:
+                    report.warnings.append(
+                        "TVL routing: Pressure Vessels source sheet not configured — "
+                        "cannot read phases. All records written to Leak sheet."
+                    )
+                    write_leaks(self._target_wb, pv_records, opts, fbr_diameters, report)
+                else:
+                    self.logInfo.emit("Loading source for phase lookup.")
+                    src_wb = load_workbook(self.source_selector.path(), data_only=True)
+                    phases = read_pv_phases_from_source(
+                        src_wb,
+                        pv_cfg.sheet,
+                        pv_cfg.name_col,
+                        phase_col,
+                        pv_cfg.start_row,
+                    )
+                    self.logInfo.emit(
+                        f"Read phases for {len(phases)} section(s)."
+                    )
+                    liquid_pvs, vapour_pvs = split_pv_records_by_phase(
+                        pv_records, phases, report
+                    )
+                    self.logInfo.emit(
+                        f"Routing: {len(liquid_pvs)} liquid PV(s) → Leak, "
+                        f"{len(vapour_pvs)} vapour PV(s) → Time Varying Leak."
+                    )
+
+                    if liquid_pvs:
+                        write_leaks(
+                            self._target_wb, liquid_pvs, opts, fbr_diameters, report
+                        )
+
+                    if vapour_pvs:
+                        tvl_opts = self.tvl_tab.tvl_options(self._transfer_mode())
+                        tvl_fbr: dict[str, float] = {}
+                        if tvl_opts.fbr_enabled:
+                            tvl_fbr_src = LeakSourceConfig(
+                                sheet=pv_cfg.sheet,
+                                name_col=pv_cfg.name_col,
+                                start_row=pv_cfg.start_row,
+                                max_line_size_col=self.tvl_tab.fbr_col_letter(),
+                            )
+                            tvl_fbr = read_fbr_diameters(
+                                src_wb, tvl_fbr_src, tvl_report
+                            )
+                        write_tvls(
+                            self._target_wb, vapour_pvs, tvl_opts, tvl_fbr, tvl_report
+                        )
+            else:
+                write_leaks(self._target_wb, pv_records, opts, fbr_diameters, report)
 
         except Exception as e:  # noqa: BLE001
             report.errors.append(f"{type(e).__name__}: {e}")
@@ -371,6 +480,94 @@ class ImportPanel(QGroupBox):
 
         self.configChanged.emit()
         self._render_report(report, "Leaks")
+        if model_tvl and (tvl_report.rows_written or tvl_report.warnings or tvl_report.errors):
+            self._render_report(tvl_report, "Time Varying Leaks (routed)")
+        self.transferComplete.emit(not report.errors and not tvl_report.errors)
+
+    # ------------------------------------------------------------------
+    # Transfer: time varying leaks (standalone, always phase-filtered)
+    # ------------------------------------------------------------------
+
+    def _run_tvl_transfer(self) -> None:
+        if not self._guard_paths():
+            return
+
+        tvl_opts = self.tvl_tab.tvl_options(self._transfer_mode())
+        if not tvl_opts.leak_sizes:
+            QMessageBox.warning(
+                self, "No leak sizes",
+                "Enter at least one leak name in the Time Varying Leaks tab "
+                "before transferring.",
+            )
+            return
+
+        phase_col = self.pv_tab.phase_col_letter()
+        if not phase_col:
+            QMessageBox.warning(
+                self, "Phase column missing",
+                "Enter the phase column letter in the Pressure Vessels tab. "
+                "Time Varying Leak transfers always filter by phase (V / SC only).",
+            )
+            return
+
+        pv_cfg = self.pv_tab.source_config()
+        if not pv_cfg.sheet:
+            QMessageBox.warning(
+                self, "Missing sheet",
+                "Configure the source sheet in the Pressure Vessels tab first.",
+            )
+            return
+
+        report = TransferReport()
+
+        try:
+            pv_records = read_pv_names_from_target(self._target_wb, report)
+            self.logInfo.emit(
+                f"Found {len(pv_records)} pressure vessel(s) in workbook."
+            )
+            if not pv_records:
+                report.warnings.append(
+                    "No pressure vessels found. Transfer pressure vessels first."
+                )
+
+            self.logInfo.emit("Loading source for phase lookup.")
+            src_wb = load_workbook(self.source_selector.path(), data_only=True)
+            phases = read_pv_phases_from_source(
+                src_wb,
+                pv_cfg.sheet,
+                pv_cfg.name_col,
+                phase_col,
+                pv_cfg.start_row,
+            )
+            self.logInfo.emit(f"Read phases for {len(phases)} section(s).")
+
+            _, vapour_pvs = split_pv_records_by_phase(pv_records, phases, report)
+            self.logInfo.emit(
+                f"{len(vapour_pvs)} vapour PV(s) (V/SC) will be written to "
+                f"'{L.TVL_SHEET_NAME}'."
+            )
+
+            fbr_diameters: dict[str, float] = {}
+            if tvl_opts.fbr_enabled:
+                fbr_src = LeakSourceConfig(
+                    sheet=pv_cfg.sheet,
+                    name_col=pv_cfg.name_col,
+                    start_row=pv_cfg.start_row,
+                    max_line_size_col=self.tvl_tab.fbr_col_letter(),
+                )
+                fbr_diameters = read_fbr_diameters(src_wb, fbr_src, report)
+                self.logInfo.emit(
+                    f"Read FBR diameters for {len(fbr_diameters)} section(s)."
+                )
+
+            write_tvls(self._target_wb, vapour_pvs, tvl_opts, fbr_diameters, report)
+
+        except Exception as e:  # noqa: BLE001
+            report.errors.append(f"{type(e).__name__}: {e}")
+            self.logError.emit(traceback.format_exc())
+
+        self.configChanged.emit()
+        self._render_report(report, "Time Varying Leaks")
         self.transferComplete.emit(not report.errors)
 
     # ------------------------------------------------------------------

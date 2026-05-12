@@ -30,6 +30,8 @@ class PressureVesselConfig:
     inventory_col: str = "E"
     inventory_mode: str = "mass"  # "mass" | "volume"
     assume_unlimited: bool = False
+    model_vapour_as_tvl: bool = False
+    phase_col: str = ""
 
 
 @dataclass
@@ -62,16 +64,36 @@ class LeakConfig:
 
 
 @dataclass
+class TimeVaryingLeakConfig:
+    leak_sizes: list[LeakSizeConfig] = field(
+        default_factory=lambda: [LeakSizeConfig() for _ in range(10)]
+    )
+    fbr_enabled: bool = False
+    fbr_max_line_size_col: str = "Z"
+    avg_rate_method: str = "1 Average rates"
+    safety_system: str = "1 Yes"
+    isolation: str = "1 Successful"
+    time_to_isolation: str = ""
+
+
+_MAX_RECENT = 10
+
+
+@dataclass
 class AppConfig:
     source_path: str = ""
     target_path: str = ""
-    transfer_mode: str = "overwrite"  # "overwrite" | "append"
+    transfer_mode: str = "overwrite"  # "overwrite" | "append" | "skip_existing"
     import_decimal_places: int = -1   # -1 = no rounding
+    recent_files: list[str] = field(default_factory=list)
     pressure_vessel: PressureVesselConfig = field(
         default_factory=PressureVesselConfig
     )
     mixture: MixtureConfig = field(default_factory=MixtureConfig)
     leak: LeakConfig = field(default_factory=LeakConfig)
+    time_varying_leak: TimeVaryingLeakConfig = field(
+        default_factory=TimeVaryingLeakConfig
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -113,19 +135,26 @@ def _from_dict(raw: dict[str, Any]) -> AppConfig:
     pv_raw = raw.get("pressure_vessel", {}) or {}
     mix_raw = raw.get("mixture", {}) or {}
     leak_raw = raw.get("leak", {}) or {}
+    tvl_raw = raw.get("time_varying_leak", {}) or {}
 
     pv = _populate(PressureVesselConfig(), pv_raw)
     mix = _populate(MixtureConfig(), mix_raw)
     leak = _populate_leak(LeakConfig(), leak_raw)
+    tvl = _populate_tvl(TimeVaryingLeakConfig(), tvl_raw)
+
+    raw_recent = raw.get("recent_files", [])
+    recent: list[str] = [str(p) for p in raw_recent if isinstance(p, str)][:_MAX_RECENT]
 
     cfg = AppConfig(
         source_path=raw.get("source_path", ""),
         target_path=raw.get("target_path", ""),
         transfer_mode=raw.get("transfer_mode", "overwrite"),
         import_decimal_places=int(raw.get("import_decimal_places", -1)),
+        recent_files=recent,
         pressure_vessel=pv,
         mixture=mix,
         leak=leak,
+        time_varying_leak=tvl,
     )
     return cfg
 
@@ -143,6 +172,36 @@ def _populate_leak(obj: "LeakConfig", raw: dict[str, Any]) -> "LeakConfig":
         obj.fbr_enabled = bool(raw["fbr_enabled"])
     if "fbr_max_line_size_col" in raw:
         obj.fbr_max_line_size_col = str(raw["fbr_max_line_size_col"])
+    raw_sizes = raw.get("leak_sizes")
+    if isinstance(raw_sizes, list):
+        sizes: list[LeakSizeConfig] = []
+        for item in raw_sizes:
+            if isinstance(item, dict):
+                sizes.append(LeakSizeConfig(
+                    name=str(item.get("name", "")),
+                    orifice_diameter=str(item.get("orifice_diameter", "")),
+                ))
+            else:
+                sizes.append(LeakSizeConfig())
+        while len(sizes) < 10:
+            sizes.append(LeakSizeConfig())
+        obj.leak_sizes = sizes[:10]
+    return obj
+
+
+def _populate_tvl(obj: "TimeVaryingLeakConfig", raw: dict[str, Any]) -> "TimeVaryingLeakConfig":
+    if "fbr_enabled" in raw:
+        obj.fbr_enabled = bool(raw["fbr_enabled"])
+    if "fbr_max_line_size_col" in raw:
+        obj.fbr_max_line_size_col = str(raw["fbr_max_line_size_col"])
+    if "avg_rate_method" in raw:
+        obj.avg_rate_method = str(raw["avg_rate_method"])
+    if "safety_system" in raw:
+        obj.safety_system = str(raw["safety_system"])
+    if "isolation" in raw:
+        obj.isolation = str(raw["isolation"])
+    if "time_to_isolation" in raw:
+        obj.time_to_isolation = str(raw["time_to_isolation"])
     raw_sizes = raw.get("leak_sizes")
     if isinstance(raw_sizes, list):
         sizes: list[LeakSizeConfig] = []

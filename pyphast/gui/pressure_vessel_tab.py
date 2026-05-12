@@ -86,6 +86,33 @@ class PressureVesselTab(QWidget):
         inv_layout.addStretch(1)
         inv_layout.addWidget(self.cb_unlimited)
 
+        # --- Vapour phase routing group ------------------------------------
+        tvl_group = QGroupBox("Vapour phase routing")
+        tvl_layout = QVBoxLayout(tvl_group)
+
+        self.cb_tvl = QCheckBox("Model vapour releases as time varying leaks")
+        self.cb_tvl.toggled.connect(self._on_tvl_toggled)
+
+        tvl_form_widget = QWidget()
+        tvl_form = QFormLayout(tvl_form_widget)
+        tvl_form.setContentsMargins(0, 0, 0, 0)
+        self.phase_col = ColumnLetterEdit("")
+        self.phase_col.setPlaceholderText("e.g. F")
+        tvl_form.addRow("Phase column (source):", self.phase_col)
+        self._tvl_form_widget = tvl_form_widget
+        self._tvl_form_widget.setEnabled(False)
+
+        tvl_note = QLabel(
+            "When enabled, sections with phase V or SC are written to the "
+            "'Time varying leak' sheet; all other phases go to 'Leak'."
+        )
+        tvl_note.setWordWrap(True)
+        tvl_note.setStyleSheet("color: #666;")
+
+        tvl_layout.addWidget(self.cb_tvl)
+        tvl_layout.addWidget(self._tvl_form_widget)
+        tvl_layout.addWidget(tvl_note)
+
         # --- Action --------------------------------------------------------
         action_layout = QHBoxLayout()
         self.btn_transfer = QPushButton("Transfer to Pressure vessel sheet")
@@ -104,6 +131,7 @@ class PressureVesselTab(QWidget):
         # --- Compose -------------------------------------------------------
         layout.addWidget(src_group)
         layout.addWidget(inv_group)
+        layout.addWidget(tvl_group)
         layout.addWidget(self.note_label)
         layout.addStretch(1)
         layout.addLayout(action_layout)
@@ -112,6 +140,9 @@ class PressureVesselTab(QWidget):
 
     def _on_unlimited_toggled(self, checked: bool) -> None:
         self.inventory_col.setDisabled(checked)
+
+    def _on_tvl_toggled(self, checked: bool) -> None:
+        self._tvl_form_widget.setEnabled(checked)
 
     # ------------------------------------------------------------------
 
@@ -144,6 +175,12 @@ class PressureVesselTab(QWidget):
     def assume_unlimited(self) -> bool:
         return self.cb_unlimited.isChecked()
 
+    def model_vapour_as_tvl(self) -> bool:
+        return self.cb_tvl.isChecked()
+
+    def phase_col_letter(self) -> str:
+        return self.phase_col.value()
+
     # ------------------------------------------------------------------
     # Persistence
 
@@ -161,6 +198,9 @@ class PressureVesselTab(QWidget):
             self.rb_mass.setChecked(True)
         self.cb_unlimited.setChecked(cfg.assume_unlimited)
         self._on_unlimited_toggled(cfg.assume_unlimited)
+        self.cb_tvl.setChecked(cfg.model_vapour_as_tvl)
+        self.phase_col.setText(cfg.phase_col)
+        self._on_tvl_toggled(cfg.model_vapour_as_tvl)
 
     def save_to_config(self, cfg: PressureVesselConfig) -> None:
         cfg.sheet = self.sheet_combo.currentText()
@@ -172,3 +212,5 @@ class PressureVesselTab(QWidget):
         cfg.inventory_col = self.inventory_col.value()
         cfg.inventory_mode = self.inventory_mode().value
         cfg.assume_unlimited = self.assume_unlimited()
+        cfg.model_vapour_as_tvl = self.model_vapour_as_tvl()
+        cfg.phase_col = self.phase_col_letter()
