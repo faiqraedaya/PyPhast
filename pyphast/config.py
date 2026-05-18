@@ -39,9 +39,9 @@ class MixtureConfig:
     sheet: str = ""
     header_row: int = 4
     start_row: int = 5
-    stream_col: str = "A"
-    components_first_col: str = "B"
-    components_last_col: str = "Z"
+    stream_col: str = "J"
+    components_first_col: str = "U"
+    components_last_col: str = "AG"
     composition_basis: str = "mole"  # "mole" | "mass"
     smart_match: bool = True
     skip_zero: bool = True

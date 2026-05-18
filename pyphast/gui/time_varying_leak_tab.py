@@ -150,6 +150,11 @@ class TimeVaryingLeakTab(QWidget):
 
         self.time_to_isolation = _TimeEdit()
         tvl_form.addRow("Time to isolation (s):", self.time_to_isolation)
+        tvl_note = QLabel(
+            "Leave blank to use default time to isolation."
+        )
+        tvl_note.setWordWrap(True)
+        tvl_note.setStyleSheet("color: #666;")
 
         self._on_safety_changed()
 

@@ -60,8 +60,11 @@ def insert_pv_after(wb, after_excel_row: int) -> int:
     ws = find_sheet(wb, L.PV_SHEET_NAME)
     first_c, last_c = L.pv_scan_col_indices()
     new_row = _insert_blank_row(ws, after_excel_row, first_c, last_c)
+    # When inserting before the first data row, copy context from the row that
+    # was just shifted down (new_row+1) rather than the pre-data header row.
+    context_src = after_excel_row if after_excel_row >= L.DATA_START_ROW else new_row + 1
     for c in range(first_c, _PV_CONTEXT_LAST_COL + 1):
-        ws.cell(row=new_row, column=c).value = ws.cell(row=after_excel_row, column=c).value
+        ws.cell(row=new_row, column=c).value = ws.cell(row=context_src, column=c).value
     ws.cell(row=new_row, column=col_letter_to_index(L.PV_COL_NAME)).value = (
         "New Pressure Vessel"
     )
@@ -137,8 +140,9 @@ def insert_leak_after(wb, after_excel_row: int) -> int:
     ws = find_sheet(wb, L.LEAK_SHEET_NAME)
     first_c, last_c = L.leak_scan_col_indices()
     new_row = _insert_blank_row(ws, after_excel_row, first_c, last_c)
+    context_src = after_excel_row if after_excel_row >= L.DATA_START_ROW else new_row + 1
     for col in _LEAK_CONTEXT_COLS:
-        ws.cell(row=new_row, column=col).value = ws.cell(row=after_excel_row, column=col).value
+        ws.cell(row=new_row, column=col).value = ws.cell(row=context_src, column=col).value
     ws.cell(row=new_row, column=col_letter_to_index(L.LEAK_COL_NAME)).value = "New Leak"
     return new_row
 
@@ -219,8 +223,9 @@ def insert_tvl_after(wb, after_excel_row: int) -> int:
     ws = find_sheet(wb, L.TVL_SHEET_NAME)
     first_c, last_c = L.tvl_scan_col_indices()
     new_row = _insert_blank_row(ws, after_excel_row, first_c, last_c)
+    context_src = after_excel_row if after_excel_row >= L.DATA_START_ROW else new_row + 1
     for col in _TVL_CONTEXT_COLS:
-        ws.cell(row=new_row, column=col).value = ws.cell(row=after_excel_row, column=col).value
+        ws.cell(row=new_row, column=col).value = ws.cell(row=context_src, column=col).value
     ws.cell(row=new_row, column=col_letter_to_index(L.TVL_COL_NAME)).value = "New TVL"
     return new_row
 
@@ -287,6 +292,41 @@ def insert_tvl_copy_after(wb, src_row: int, after_row: int) -> int:
     actual_src = src_row + 1 if src_row > after_row else src_row
     _copy_row(ws, actual_src, new_row, first_c, last_c)
     return new_row
+
+
+# ---------------------------------------------------------------------------
+# Rename operations
+# ---------------------------------------------------------------------------
+
+def rename_pv(wb, excel_row: int, old_name: str, new_name: str) -> None:
+    """Rename a PV in the PV sheet and update all Leak/TVL rows that reference it."""
+    pv_ws = find_sheet(wb, L.PV_SHEET_NAME)
+    pv_ws.cell(row=excel_row, column=col_letter_to_index(L.PV_COL_NAME)).value = new_name
+    for sheet_name, pv_col_letter, scan_fn in (
+        (L.LEAK_SHEET_NAME, L.LEAK_COL_PV_NAME, L.leak_scan_col_indices),
+        (L.TVL_SHEET_NAME,  L.TVL_COL_PV_NAME,  L.tvl_scan_col_indices),
+    ):
+        try:
+            ws = find_sheet(wb, sheet_name)
+        except Exception:  # noqa: BLE001
+            continue
+        pv_col = col_letter_to_index(pv_col_letter)
+        first_c, last_c = scan_fn()
+        last_row = find_last_populated_row(ws, first_c, last_c, L.DATA_START_ROW)
+        for r in range(L.DATA_START_ROW, last_row + 1):
+            cell = ws.cell(row=r, column=pv_col)
+            if cell.value is not None and str(cell.value).strip() == old_name:
+                cell.value = new_name
+
+
+def rename_leak(wb, excel_row: int, new_name: str) -> None:
+    ws = find_sheet(wb, L.LEAK_SHEET_NAME)
+    ws.cell(row=excel_row, column=col_letter_to_index(L.LEAK_COL_NAME)).value = new_name
+
+
+def rename_tvl(wb, excel_row: int, new_name: str) -> None:
+    ws = find_sheet(wb, L.TVL_SHEET_NAME)
+    ws.cell(row=excel_row, column=col_letter_to_index(L.TVL_COL_NAME)).value = new_name
 
 
 # ---------------------------------------------------------------------------

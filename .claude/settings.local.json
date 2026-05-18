@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(python -c \"from PyPhast.core.leak import *; from PyPhast.config import LeakConfig, LeakSizeConfig, AppConfig; from PyPhast.gui.leak_tab import LeakTab; print\\('OK'\\)\")"
+      "Bash(python -c \"from PyPhast.core.leak import *; from PyPhast.config import LeakConfig, LeakSizeConfig, AppConfig; from PyPhast.gui.leak_tab import LeakTab; print\\('OK'\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(python -c \"from pyphast.gui.hierarchy_viewer import HierarchyViewerWidget; from pyphast.gui.target_viewer import TargetViewerWidget; print\\('OK'\\)\")"
     ]
   }
 }

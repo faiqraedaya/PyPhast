@@ -41,6 +41,9 @@ from ..core.pv_operations import (
     insert_pv_copy_after,
     insert_tvl_after,
     insert_tvl_copy_after,
+    rename_leak,
+    rename_pv,
+    rename_tvl,
     swap_pv_rows,
 )
 from .hierarchy_viewer import HierarchyViewerWidget
@@ -84,15 +87,24 @@ class MainWindow(QMainWindow):
         self.hierarchy_viewer.tvlInsertRequested.connect(self._tvl_insert)
         self.hierarchy_viewer.tvlDeleteRequested.connect(self._tvl_delete)
         self.hierarchy_viewer.tvlPasteRequested.connect(self._tvl_paste)
+        self.hierarchy_viewer.pvRenameRequested.connect(self._pv_rename)
+        self.hierarchy_viewer.leakRenameRequested.connect(self._leak_rename)
+        self.hierarchy_viewer.tvlRenameRequested.connect(self._tvl_rename)
 
         self.target_viewer = TargetViewerWidget()
         self.target_viewer.workbookModified.connect(self._on_workbook_modified)
         self.target_viewer.pvInsertRequested.connect(self._pv_insert)
         self.target_viewer.pvDeleteRequested.connect(self._pv_delete)
+        self.target_viewer.pvBatchDeleteRequested.connect(self._pv_batch_delete)
         self.target_viewer.leakInsertRequested.connect(self._leak_insert)
         self.target_viewer.leakDeleteRequested.connect(self._leak_delete)
+        self.target_viewer.leakBatchDeleteRequested.connect(self._leak_batch_delete)
         self.target_viewer.tvlInsertRequested.connect(self._tvl_insert)
         self.target_viewer.tvlDeleteRequested.connect(self._tvl_delete)
+        self.target_viewer.tvlBatchDeleteRequested.connect(self._tvl_batch_delete)
+        self.target_viewer.pvPasteRowRequested.connect(self._pv_paste)
+        self.target_viewer.leakPasteRowRequested.connect(self._leak_paste)
+        self.target_viewer.tvlPasteRowRequested.connect(self._tvl_paste)
         self.target_viewer.countsUpdated.connect(self._on_counts_updated)
 
         self.import_panel = ImportPanel()
@@ -232,17 +244,17 @@ class MainWindow(QMainWindow):
         # ── View ──────────────────────────────────────────────────────────
         view_menu = bar.addMenu("&View")
 
-        act_expand = QAction("&Expand hierarchy", self)
-        act_expand.setShortcut("Ctrl+Right")
-        act_expand.triggered.connect(self.hierarchy_viewer.expand_all)
-        view_menu.addAction(act_expand)
+        self._act_toggle_hierarchy = QAction("Show &Project Hierarchy", self)
+        self._act_toggle_hierarchy.setCheckable(True)
+        self._act_toggle_hierarchy.setChecked(True)
+        self._act_toggle_hierarchy.triggered.connect(self._toggle_hierarchy)
+        view_menu.addAction(self._act_toggle_hierarchy)
 
-        act_collapse = QAction("&Collapse hierarchy", self)
-        act_collapse.setShortcut("Ctrl+Left")
-        act_collapse.triggered.connect(self.hierarchy_viewer.collapse_all)
-        view_menu.addAction(act_collapse)
-
-        view_menu.addSeparator()
+        self._act_toggle_import = QAction("Show &Data Transfer", self)
+        self._act_toggle_import.setCheckable(True)
+        self._act_toggle_import.setChecked(True)
+        self._act_toggle_import.triggered.connect(self._toggle_import)
+        view_menu.addAction(self._act_toggle_import)
 
         self._act_toggle_log = QAction("Show &Log", self)
         self._act_toggle_log.setCheckable(True)
@@ -491,6 +503,30 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Delete failed", f"Could not delete row:\n{e}")
             self._log_error(f"PV delete failed: {e}")
 
+    def _pv_batch_delete(self, rows) -> None:
+        if self._target_wb is None:
+            return
+        count = len(rows)
+        reply = QMessageBox.question(
+            self,
+            "Delete Pressure Vessels",
+            f"Delete {count} pressure vessel(s) and all their associated leaks and TVLs?\n"
+            "This cannot be undone (until you close without saving).",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            for excel_row, pv_name in sorted(rows, key=lambda x: x[0], reverse=True):
+                delete_pv_row(self._target_wb, excel_row, pv_name)
+            self._set_dirty()
+            self.target_viewer.refresh()
+            self.hierarchy_viewer.refresh()
+            self._log_info(f"Deleted {count} pressure vessel(s).")
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Delete failed", f"Could not delete rows:\n{e}")
+            self._log_error(f"PV batch delete failed: {e}")
+
     def _pv_move_up(self, excel_row: int) -> None:
         if self._target_wb is None:
             return
@@ -602,6 +638,54 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Paste failed", f"Could not paste leak:\n{e}")
             self._log_error(f"Leak paste failed: {e}")
 
+    def _leak_batch_delete(self, excel_rows) -> None:
+        if self._target_wb is None:
+            return
+        count = len(excel_rows)
+        reply = QMessageBox.question(
+            self,
+            "Delete Leaks",
+            f"Delete {count} leak row(s)?\n"
+            "This cannot be undone (until you close without saving).",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            for excel_row in sorted(excel_rows, reverse=True):
+                delete_leak_row(self._target_wb, excel_row)
+            self._set_dirty()
+            self.target_viewer.refresh()
+            self.hierarchy_viewer.refresh()
+            self._log_info(f"Deleted {count} leak row(s).")
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Delete failed", f"Could not delete rows:\n{e}")
+            self._log_error(f"Leak batch delete failed: {e}")
+
+    def _tvl_batch_delete(self, excel_rows) -> None:
+        if self._target_wb is None:
+            return
+        count = len(excel_rows)
+        reply = QMessageBox.question(
+            self,
+            "Delete Time Varying Leaks",
+            f"Delete {count} time varying leak row(s)?\n"
+            "This cannot be undone (until you close without saving).",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            for excel_row in sorted(excel_rows, reverse=True):
+                delete_tvl_row(self._target_wb, excel_row)
+            self._set_dirty()
+            self.target_viewer.refresh()
+            self.hierarchy_viewer.refresh()
+            self._log_info(f"Deleted {count} TVL row(s).")
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Delete failed", f"Could not delete rows:\n{e}")
+            self._log_error(f"TVL batch delete failed: {e}")
+
     def _pv_add_tvl(self, pv_excel_row: int, pv_name: str) -> None:
         if self._target_wb is None:
             return
@@ -668,9 +752,54 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Paste failed", f"Could not paste TVL:\n{e}")
             self._log_error(f"TVL paste failed: {e}")
 
+    def _pv_rename(self, excel_row: int, old_name: str, new_name: str) -> None:
+        if self._target_wb is None:
+            return
+        try:
+            rename_pv(self._target_wb, excel_row, old_name, new_name)
+            self._set_dirty()
+            self.target_viewer.refresh()
+            self.hierarchy_viewer.refresh()
+            self._log_info(f"Renamed pressure vessel '{old_name}' → '{new_name}'.")
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Rename failed", f"Could not rename pressure vessel:\n{e}")
+            self._log_error(f"PV rename failed: {e}")
+
+    def _leak_rename(self, excel_row: int, new_name: str) -> None:
+        if self._target_wb is None:
+            return
+        try:
+            rename_leak(self._target_wb, excel_row, new_name)
+            self._set_dirty()
+            self.target_viewer.refresh()
+            self.hierarchy_viewer.refresh()
+            self._log_info(f"Renamed leak at row {excel_row} → '{new_name}'.")
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Rename failed", f"Could not rename leak:\n{e}")
+            self._log_error(f"Leak rename failed: {e}")
+
+    def _tvl_rename(self, excel_row: int, new_name: str) -> None:
+        if self._target_wb is None:
+            return
+        try:
+            rename_tvl(self._target_wb, excel_row, new_name)
+            self._set_dirty()
+            self.target_viewer.refresh()
+            self.hierarchy_viewer.refresh()
+            self._log_info(f"Renamed TVL at row {excel_row} → '{new_name}'.")
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.critical(self, "Rename failed", f"Could not rename time varying leak:\n{e}")
+            self._log_error(f"TVL rename failed: {e}")
+
     # -----------------------------------------------------------------------
     # View menu actions
     # -----------------------------------------------------------------------
+
+    def _toggle_hierarchy(self, checked: bool) -> None:
+        self.hierarchy_viewer.setVisible(checked)
+
+    def _toggle_import(self, checked: bool) -> None:
+        self.import_panel.setVisible(checked)
 
     def _toggle_log(self, checked: bool) -> None:
         self._log_group.setVisible(checked)

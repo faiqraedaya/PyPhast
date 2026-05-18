@@ -4,4 +4,6 @@ version = "0.2.0"
 description = "PyPhast provides a Python-based GUI to view, edit and transfer data to Excel files for Phast input."
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = []
+dependencies = [
+    "openpyxl>=3.1.5",
+]

@@ -164,16 +164,20 @@ def write_leaks(
     current_row = start_row
     skip_mode = opts.transfer_mode is TransferMode.SKIP_EXISTING
     skipped_count = 0
+    filtered_count = 0
 
     for pv in pv_records:
+        fbr_diameter: float | None = fbr_diameters.get(pv.pv_name) if opts.fbr_enabled else None
         for leak in active_leaks:
             key = (pv.pv_name, leak.name.strip())
             if skip_mode and key in existing_leak_keys:
                 skipped_count += 1
                 continue
 
-            if opts.fbr_enabled and leak.name.strip().upper() == "FBR":
-                diameter: float | None = fbr_diameters.get(pv.pv_name)
+            is_fbr_leak = opts.fbr_enabled and leak.name.strip().upper() == "FBR"
+
+            if is_fbr_leak:
+                diameter: float | None = fbr_diameter
                 if diameter is None:
                     report.warnings.append(
                         f"FBR: no max line size found for PV '{pv.pv_name}' "
@@ -181,6 +185,14 @@ def write_leaks(
                     )
             else:
                 diameter = leak.orifice_diameter
+                if (
+                    opts.fbr_enabled
+                    and fbr_diameter is not None
+                    and diameter is not None
+                    and diameter > fbr_diameter
+                ):
+                    filtered_count += 1
+                    continue
 
             ws.cell(row=current_row, column=cols["use"]).value = pv.use
             ws.cell(row=current_row, column=cols["study"]).value = pv.study
@@ -195,6 +207,11 @@ def write_leaks(
 
     if skip_mode and skipped_count:
         report.info.append(f"Skip existing: {skipped_count} leak row(s) skipped.")
+    if filtered_count:
+        report.info.append(
+            f"FBR filter: {filtered_count} leak row(s) omitted "
+            f"(orifice diameter exceeds PV max line size)."
+        )
 
     report.rows_written = current_row - start_row
     if report.rows_written > 0:

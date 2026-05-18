@@ -77,7 +77,6 @@ class ImportPanel(QGroupBox):
 
     def load_from_config(self, config: AppConfig) -> None:
         self._mixture_user_overrides = config.mixture.user_overrides
-        self.source_selector.setPath(config.source_path)
         if config.transfer_mode == "append":
             self.rb_append.setChecked(True)
         elif config.transfer_mode == "skip_existing":
@@ -89,7 +88,9 @@ class ImportPanel(QGroupBox):
         self.mix_tab.load_from_config(config.mixture)
         self.leak_tab.load_from_config(config.leak)
         self.tvl_tab.load_from_config(config.time_varying_leak)
-        self._refresh_sheet_names()
+        # Set source path last: setPath may emit configChanged → _save_config
+        # synchronously. Tabs must be loaded first so that save reads correct values.
+        self.source_selector.setPath(config.source_path)
 
     def save_to_config(self, config: AppConfig) -> None:
         config.source_path   = self.source_selector.path()
@@ -379,18 +380,7 @@ class ImportPanel(QGroupBox):
             )
             return
 
-        if model_tvl:
-            tvl_opts = self.tvl_tab.tvl_options(self._transfer_mode())
-            if not tvl_opts.leak_sizes:
-                QMessageBox.warning(
-                    self, "No TVL leak sizes",
-                    "TVL routing is enabled but no leak sizes are configured in the "
-                    "Time Varying Leaks tab.",
-                )
-                return
-
         report = TransferReport()
-        tvl_report = TransferReport()
 
         try:
             pv_records = read_pv_names_from_target(self._target_wb, report)
@@ -439,37 +429,18 @@ class ImportPanel(QGroupBox):
                         phase_col,
                         pv_cfg.start_row,
                     )
-                    self.logInfo.emit(
-                        f"Read phases for {len(phases)} section(s)."
-                    )
+                    self.logInfo.emit(f"Read phases for {len(phases)} section(s).")
                     liquid_pvs, vapour_pvs = split_pv_records_by_phase(
                         pv_records, phases, report
                     )
                     self.logInfo.emit(
-                        f"Routing: {len(liquid_pvs)} liquid PV(s) → Leak, "
-                        f"{len(vapour_pvs)} vapour PV(s) → Time Varying Leak."
+                        f"Phase filter: {len(liquid_pvs)} liquid PV(s) → Leak, "
+                        f"{len(vapour_pvs)} vapour PV(s) skipped "
+                        f"(use 'Transfer to Time Varying Leak sheet')."
                     )
-
                     if liquid_pvs:
                         write_leaks(
                             self._target_wb, liquid_pvs, opts, fbr_diameters, report
-                        )
-
-                    if vapour_pvs:
-                        tvl_opts = self.tvl_tab.tvl_options(self._transfer_mode())
-                        tvl_fbr: dict[str, float] = {}
-                        if tvl_opts.fbr_enabled:
-                            tvl_fbr_src = LeakSourceConfig(
-                                sheet=pv_cfg.sheet,
-                                name_col=pv_cfg.name_col,
-                                start_row=pv_cfg.start_row,
-                                max_line_size_col=self.tvl_tab.fbr_col_letter(),
-                            )
-                            tvl_fbr = read_fbr_diameters(
-                                src_wb, tvl_fbr_src, tvl_report
-                            )
-                        write_tvls(
-                            self._target_wb, vapour_pvs, tvl_opts, tvl_fbr, tvl_report
                         )
             else:
                 write_leaks(self._target_wb, pv_records, opts, fbr_diameters, report)
@@ -480,9 +451,7 @@ class ImportPanel(QGroupBox):
 
         self.configChanged.emit()
         self._render_report(report, "Leaks")
-        if model_tvl and (tvl_report.rows_written or tvl_report.warnings or tvl_report.errors):
-            self._render_report(tvl_report, "Time Varying Leaks (routed)")
-        self.transferComplete.emit(not report.errors and not tvl_report.errors)
+        self.transferComplete.emit(not report.errors)
 
     # ------------------------------------------------------------------
     # Transfer: time varying leaks (standalone, always phase-filtered)

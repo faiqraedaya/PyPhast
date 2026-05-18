@@ -12,6 +12,7 @@ from PySide6.QtGui import QAction, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QMenu,
     QPushButton,
     QTreeWidget,
@@ -84,6 +85,11 @@ class HierarchyViewerWidget(QGroupBox):
     tvlDeleteRequested  = Signal(int)          # excel_row
     tvlPasteRequested   = Signal(int, int, bool)  # src_row, after_row, is_cut
 
+    # Rename operations
+    pvRenameRequested   = Signal(int, str, str)  # excel_row, old_name, new_name
+    leakRenameRequested = Signal(int, str)        # excel_row, new_name
+    tvlRenameRequested  = Signal(int, str)        # excel_row, new_name
+
     def __init__(self, parent=None) -> None:
         super().__init__("Project Hierarchy", parent)
         self._wb = None
@@ -142,6 +148,7 @@ class HierarchyViewerWidget(QGroupBox):
             (QKeySequence.StandardKey.Copy,  self._on_copy),
             (QKeySequence.StandardKey.Cut,   self._on_cut),
             (QKeySequence.StandardKey.Paste, self._on_paste),
+            (QKeySequence(Qt.Key.Key_F2),    self._on_rename),
         ):
             sc = QShortcut(key, self)
             sc.setContext(ctx)
@@ -204,13 +211,13 @@ class HierarchyViewerWidget(QGroupBox):
                 pv_item.setExpanded(True)
                 pv_item.setData(0, _ROLE, ("pv", excel_row, pv_name))
 
-                for leak_text, leak_row in leak_data.get((study, folder_path, pv_name), []):
+                for leak_text, leak_row, leak_name in leak_data.get((study, folder_path, pv_name), []):
                     leak_item = QTreeWidgetItem(pv_item, [leak_text])
-                    leak_item.setData(0, _ROLE, ("leak", leak_row))
+                    leak_item.setData(0, _ROLE, ("leak", leak_row, leak_name))
 
-                for tvl_text, tvl_row in tvl_data.get((study, folder_path, pv_name), []):
+                for tvl_text, tvl_row, tvl_name in tvl_data.get((study, folder_path, pv_name), []):
                     tvl_item = QTreeWidgetItem(pv_item, [tvl_text])
-                    tvl_item.setData(0, _ROLE, ("tvl", tvl_row))
+                    tvl_item.setData(0, _ROLE, ("tvl", tvl_row, tvl_name))
 
     # ------------------------------------------------------------------
     # Context menu
@@ -229,6 +236,10 @@ class HierarchyViewerWidget(QGroupBox):
         if data and data[0] == "pv":
             _, excel_row, pv_name = data
             menu.addSeparator()
+            menu.addAction("Rename",
+                           lambda: self._on_rename())
+            menu.addAction("Add Pressure Vessel Above",
+                           lambda: self.pvInsertRequested.emit(excel_row - 1))
             menu.addAction("Add Pressure Vessel Below",
                            lambda: self.pvInsertRequested.emit(excel_row))
             menu.addAction("Add Leak",
@@ -252,8 +263,12 @@ class HierarchyViewerWidget(QGroupBox):
                 menu.addAction("Paste Below", lambda: self._emit_pv_paste(src, excel_row))
 
         elif data and data[0] == "leak":
-            _, leak_row = data
+            _, leak_row, _leak_name = data
             menu.addSeparator()
+            menu.addAction("Rename",
+                           lambda: self._on_rename())
+            menu.addAction("Add Leak Above",
+                           lambda: self.leakInsertRequested.emit(leak_row - 1))
             menu.addAction("Add Leak Below",
                            lambda: self.leakInsertRequested.emit(leak_row))
             menu.addAction("Delete Leak",
@@ -268,8 +283,12 @@ class HierarchyViewerWidget(QGroupBox):
                 menu.addAction("Paste Below", lambda: self._emit_leak_paste(src, leak_row))
 
         elif data and data[0] == "tvl":
-            _, tvl_row = data
+            _, tvl_row, _tvl_name = data
             menu.addSeparator()
+            menu.addAction("Rename",
+                           lambda: self._on_rename())
+            menu.addAction("Add Time Varying Leak Above",
+                           lambda: self.tvlInsertRequested.emit(tvl_row - 1))
             menu.addAction("Add Time Varying Leak Below",
                            lambda: self.tvlInsertRequested.emit(tvl_row))
             menu.addAction("Delete Time Varying Leak",
@@ -301,13 +320,13 @@ class HierarchyViewerWidget(QGroupBox):
             self._clipboard = None
 
     def _emit_leak_paste(self, src: tuple, after_row: int) -> None:
-        _, src_row = src
+        src_row = src[1]
         self.leakPasteRequested.emit(src_row, after_row, self._clipboard_is_cut)
         if self._clipboard_is_cut:
             self._clipboard = None
 
     def _emit_tvl_paste(self, src: tuple, after_row: int) -> None:
-        _, src_row = src
+        src_row = src[1]
         self.tvlPasteRequested.emit(src_row, after_row, self._clipboard_is_cut)
         if self._clipboard_is_cut:
             self._clipboard = None
@@ -341,9 +360,9 @@ class HierarchyViewerWidget(QGroupBox):
         if clip_type == "pv" and item_data[0] == "pv":
             self._emit_pv_paste(self._clipboard, item_data[1])
         elif clip_type == "leak" and item_data[0] == "leak":
-            self._emit_leak_paste(self._clipboard, item_data[1])
+            self._emit_leak_paste(self._clipboard, item_data[1])  # item_data[1] = leak_row
         elif clip_type == "tvl" and item_data[0] == "tvl":
-            self._emit_tvl_paste(self._clipboard, item_data[1])
+            self._emit_tvl_paste(self._clipboard, item_data[1])   # item_data[1] = tvl_row
 
     # ------------------------------------------------------------------
     # Move-button callbacks
@@ -364,6 +383,36 @@ class HierarchyViewerWidget(QGroupBox):
         data = self._current_item_data()
         if data and data[0] == "pv":
             self.pvMoveDownRequested.emit(data[1])
+
+    def _on_rename(self) -> None:
+        item = self._tree.currentItem()
+        if item is None:
+            return
+        data = item.data(0, _ROLE)
+        if not data:
+            return
+        kind = data[0]
+        if kind == "pv":
+            _, excel_row, old_name = data
+            new_name, ok = QInputDialog.getText(
+                self, "Rename Pressure Vessel", "New name:", text=old_name
+            )
+            if ok and new_name.strip() and new_name.strip() != old_name:
+                self.pvRenameRequested.emit(excel_row, old_name, new_name.strip())
+        elif kind == "leak":
+            _, leak_row, current_name = data
+            new_name, ok = QInputDialog.getText(
+                self, "Rename Leak", "New name:", text=current_name
+            )
+            if ok and new_name.strip() and new_name.strip() != current_name:
+                self.leakRenameRequested.emit(leak_row, new_name.strip())
+        elif kind == "tvl":
+            _, tvl_row, current_name = data
+            new_name, ok = QInputDialog.getText(
+                self, "Rename Time Varying Leak", "New name:", text=current_name
+            )
+            if ok and new_name.strip() and new_name.strip() != current_name:
+                self.tvlRenameRequested.emit(tvl_row, new_name.strip())
 
     def _on_selection_changed(self, current, _previous) -> None:
         data = current.data(0, _ROLE) if current else None
@@ -443,7 +492,7 @@ class HierarchyViewerWidget(QGroupBox):
             orifice   = _str_val(ws, r, _LEAK_ORIFICE_COL)
             leak_text = f"{leak_name}: {orifice}" if orifice else leak_name
             key = (study, _folder_path(ws, r), pv_name)
-            result.setdefault(key, []).append((leak_text, r))
+            result.setdefault(key, []).append((leak_text, r, leak_name))
         return result
 
     def _read_tvl_rows(
@@ -468,5 +517,5 @@ class HierarchyViewerWidget(QGroupBox):
             orifice  = _str_val(ws, r, _TVL_ORIFICE_COL)
             tvl_text = f"TVL: {tvl_name}: {orifice}" if orifice else f"TVL: {tvl_name}"
             key = (study, _folder_path(ws, r), pv_name)
-            result.setdefault(key, []).append((tvl_text, r))
+            result.setdefault(key, []).append((tvl_text, r, tvl_name))
         return result
