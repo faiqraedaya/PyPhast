@@ -1,10 +1,5 @@
-"""PyPhast application entry point.
-
-Run from the project root:
-
-    python -m PyPhast
-or
-    python main.py
+"""
+PyPhast application entry point.
 """
 
 from __future__ import annotations
